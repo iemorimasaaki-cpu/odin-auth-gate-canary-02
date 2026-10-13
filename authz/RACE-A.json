@@ -1,0 +1,21 @@
+{
+  "schema": "odin-authz/1",
+  "package_id": "RACE-A",
+  "revision": 1,
+  "approval_ref": "OWNER-EXECUTION-APPROVAL cmsg_01PXYeYfQNJpGFcsQBQdnsXj53VR9q7T7GJ5RDTUyKX8e4 (declarative; not machine-verified)",
+  "repo": "iemorimasaaki-cpu/odin-auth-gate-canary-02",
+  "baseline_sha": "98d001da379da6627e0254b1fba2782f3d7c8693",
+  "target_ref": "sandbox-target",
+  "allowed_ops": [
+    "noop-implement",
+    "noop-remediate"
+  ],
+  "scope_paths": [
+    "sandbox/a/**"
+  ],
+  "issued_at": "2026-10-13T00:00:00Z",
+  "expires_at": "2026-10-20T00:00:00Z",
+  "max_remediation_rounds": 2,
+  "revoked": false,
+  "status": "APPROVED"
+}

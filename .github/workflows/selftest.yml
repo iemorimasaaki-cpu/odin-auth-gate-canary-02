@@ -1,0 +1,22 @@
+name: odin-selftest
+run-name: "selftest (no Environment; ref namespace refs/odin-test/${{ github.run_id }})"
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      GATE_REF_PREFIX: refs/odin-test/${{ github.run_id }}
+    steps:
+      - name: Fetch scripts
+        run: |
+          git init -q gate && cd gate
+          git -c http.extraheader="Authorization: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)" fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}" "$GITHUB_SHA"
+          git checkout -q FETCH_HEAD
+      - name: Run live selftest (real API, isolated ref namespace)
+        run: node gate/scripts/selftest.mjs
