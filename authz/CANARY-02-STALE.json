@@ -1,7 +1,7 @@
 {
   "schema": "odin-authz/1",
   "package_id": "CANARY-02-STALE",
-  "revision": 1,
+  "revision": 2,
   "approval_ref": "OWNER-EXECUTION-APPROVAL cmsg_01PXYeYfQNJpGFcsQBQdnsXj53VR9q7T7GJ5RDTUyKX8e4 (declarative; not machine-verified)",
   "repo": "iemorimasaaki-cpu/odin-auth-gate-canary-02",
   "baseline_sha": "98d001da379da6627e0254b1fba2782f3d7c8693",
