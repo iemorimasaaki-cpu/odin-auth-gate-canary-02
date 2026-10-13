@@ -1,0 +1,77 @@
+name: odin-gate
+run-name: "gate ${{ inputs.package_id }} op=${{ inputs.op }} r${{ inputs.round }} sha=${{ inputs.target_sha }} key=${{ inputs.idem_key }}"
+on:
+  workflow_dispatch:
+    inputs:
+      package_id: { description: "Synthetic package id", required: true, type: string }
+      op: { description: "noop-implement | noop-remediate", required: true, type: string }
+      round: { description: "0 = implement, N = remediation round", required: true, type: string }
+      target_sha: { description: "Expected baseline SHA (40 hex)", required: true, type: string }
+      authz_sha: { description: "Git blob SHA of authz/<package>.json on main", required: true, type: string }
+      paths: { description: "Comma-separated synthetic paths", required: true, type: string }
+      idem_key: { description: "Invocation id (lowercase, 8-64 chars)", required: true, type: string }
+permissions: {}
+jobs:
+  precheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      run: ${{ steps.pre.outputs.run }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      IN_PACKAGE_ID: ${{ inputs.package_id }}
+      IN_OP: ${{ inputs.op }}
+      IN_ROUND: ${{ inputs.round }}
+      IN_TARGET_SHA: ${{ inputs.target_sha }}
+      IN_AUTHZ_SHA: ${{ inputs.authz_sha }}
+      IN_PATHS: ${{ inputs.paths }}
+      IN_IDEM_KEY: ${{ inputs.idem_key }}
+    steps:
+      - name: Fetch gate scripts at the workflow commit (no third-party actions)
+        run: |
+          git init -q gate && cd gate
+          git -c http.extraheader="Authorization: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)" fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}" "$GITHUB_SHA"
+          git checkout -q FETCH_HEAD
+      - id: pre
+        name: Precheck (read-only, fail-closed)
+        run: node gate/scripts/gate.mjs precheck
+  owner-approval:
+    needs: precheck
+    if: needs.precheck.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions: {}
+    environment: owner-approval
+    steps:
+      - name: Owner approval recorded by Environment protection
+        run: echo "owner-approval environment passed"
+  claim-and-run:
+    needs: [precheck, owner-approval]
+    if: needs.precheck.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: write
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      IN_PACKAGE_ID: ${{ inputs.package_id }}
+      IN_OP: ${{ inputs.op }}
+      IN_ROUND: ${{ inputs.round }}
+      IN_TARGET_SHA: ${{ inputs.target_sha }}
+      IN_AUTHZ_SHA: ${{ inputs.authz_sha }}
+      IN_PATHS: ${{ inputs.paths }}
+      IN_IDEM_KEY: ${{ inputs.idem_key }}
+    steps:
+      - name: Fetch gate scripts
+        run: |
+          git init -q gate && cd gate
+          git -c http.extraheader="Authorization: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)" fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}" "$GITHUB_SHA"
+          git checkout -q FETCH_HEAD
+      - id: claim
+        name: Re-verify after approval, then claim (create-only refs)
+        run: node gate/scripts/gate.mjs claim
+      - name: Worker (no-op)
+        if: steps.claim.outputs.claimed == 'true'
+        run: echo "WORKER-NOOP package=${IN_PACKAGE_ID} op=${IN_OP} round=${IN_ROUND} sha=${IN_TARGET_SHA}"
