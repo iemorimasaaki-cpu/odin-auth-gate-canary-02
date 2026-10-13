@@ -15,3 +15,6 @@ if (wait > 0 && wait < 120000) await new Promise((r) => setTimeout(r, wait));
 const t0 = Date.now();
 const out = await Promise.all(Array.from({ length: N }, async (_, a) => { const res = await claim(api, mk(a), env); return { worker, attempt: a, code: res.code, t_start_ms: t0 }; }));
 for (const o of out) console.log('RACE-RESULT ' + JSON.stringify(o));
+const won = out.filter((o) => o.code === 'CLAIMED').length;
+console.log('RACE-LOCAL-SUMMARY ' + JSON.stringify({ worker, claimed: won, codes: out.map((o) => o.code) }));
+if (won > 1) { console.error('MORE THAN ONE CLAIM WON IN ONE JOB'); process.exit(1); }

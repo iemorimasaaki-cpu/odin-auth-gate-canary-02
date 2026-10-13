@@ -1,5 +1,5 @@
 name: odin-gate
-run-name: "gate ${{ inputs.package_id }} op=${{ inputs.op }} r${{ inputs.round }} sha=${{ inputs.target_sha }} key=${{ inputs.idem_key }}"
+run-name: "gate ${{ inputs.package_id }} op=${{ inputs.op }} r${{ inputs.round }} sha=${{ inputs.target_sha }} authz=${{ inputs.authz_sha }} paths=${{ inputs.paths }} key=${{ inputs.idem_key }}"
 on:
   workflow_dispatch:
     inputs:

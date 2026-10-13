@@ -1,7 +1,7 @@
 // Gate runtime: GitHub REST adapter + precheck/claim. Node >= 20, no dependencies.
 // The only trusted inputs are: authz file on main, real branch head, create-only refs, runner clock.
 import { appendFileSync } from 'node:fs';
-import { decide } from './gate-core.mjs';
+import { decide, validateInput, RE_REF } from './gate-core.mjs';
 
 const PREFIX_RE = /^refs\/odin(-test\/\d{1,20})?$/;
 
@@ -31,7 +31,7 @@ export function makeGitHub({ token, repo, apiBase = 'https://api.github.com' }) 
   }
   return {
     async getAuthz(pkg) {
-      const r = await read('/contents/authz/' + encodeURIComponent(pkg) + '.json?ref=main');
+      const r = await read('/contents/authz/' + encodeURIComponent(pkg) + '.json?ref=refs%2Fheads%2Fmain');
       if (r.status === 404) return { authz: null, sha: null };
       if (r.status !== 200 || r.json.type !== 'file') throw new Error('authz read status ' + r.status);
       let authz = null;
@@ -70,13 +70,14 @@ export function refNames(prefix, pkg, round, key) {
 
 async function gather(api, input, env) {
   const prefix = env.GATE_REF_PREFIX || 'refs/odin';
+  // validated input only: it is used to build API paths
   if (!PREFIX_RE.test(prefix)) throw new Error('bad GATE_REF_PREFIX');
   const { authz, sha } = await api.getAuthz(input.package_id);
   const names = refNames(prefix, input.package_id, input.round, input.idem_key);
   const state = { blocked: false, idemExists: false, claimed: new Set() };
   let head = null;
   if (authz && authz.package_id === input.package_id) {
-    if (typeof authz.target_ref === 'string' && /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,100}$/.test(authz.target_ref)) head = await api.getHead(authz.target_ref);
+    if (typeof authz.target_ref === 'string' && RE_REF.test(authz.target_ref) && !authz.target_ref.split('/').some((s) => s === '' || s === '.' || s === '..')) head = await api.getHead(authz.target_ref);
     state.blocked = await api.refExists(names.block);
     state.idemExists = await api.refExists(names.idem);
     const max = Number.isInteger(authz.max_remediation_rounds) ? Math.min(authz.max_remediation_rounds, 10) : 0;
@@ -93,10 +94,12 @@ export function inputFromEnv(env) {
 }
 
 async function evaluate(api, input, env) {
+  const iv = validateInput(input);
+  if (iv) return { d: { ok: false, code: 'BAD_INPUT:' + iv, status: 'DENIED' }, g: null };
   const g = await gather(api, input, env);
   const d = decide({
     authz: g.authz, authzBlobSha: g.authzBlobSha, input, head: g.head, state: g.state,
-    now: env.GATE_NOW_MS ? Number(env.GATE_NOW_MS) : Date.now(), repo: env.GITHUB_REPOSITORY,
+    now: env.GATE_NOW_MS && /^refs\/odin-test\//.test(env.GATE_REF_PREFIX || '') ? Number(env.GATE_NOW_MS) : Date.now(), repo: env.GITHUB_REPOSITORY,
     dispatchRef: env.GITHUB_REF,
   });
   return { d, g };
@@ -130,7 +133,7 @@ export async function claim(api, input, env) {
 }
 
 function emit(env, res, extra = {}) {
-  const lines = Object.entries({ ...res, ...extra }).filter(([k]) => k !== 'exit').map(([k, v]) => k + '=' + String(v));
+  const lines = Object.entries({ ...res, ...extra }).filter(([k]) => k !== 'exit').map(([k, v]) => k + '=' + String(v).replace(/[\r\n]+/g, ' '));
   if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, lines.join('\n') + '\n');
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, '### gate: ' + res.code + ' (' + res.status + ')\n```\n' + lines.join('\n') + '\n```\n');
   console.log('GATE-RESULT ' + JSON.stringify(res));

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { decide, pathAllowed, parseTs } from '../scripts/gate-core.mjs';
-import { precheck, claim, refNames } from '../scripts/gate.mjs';
+import { precheck, claim, refNames, makeGitHub } from '../scripts/gate.mjs';
 
 const REPO = 'iemorimasaaki-cpu/odin-auth-gate-canary-02';
 const BASE = '98d001da379da6627e0254b1fba2782f3d7c8693';
@@ -143,4 +143,55 @@ test('workflows: workflow_dispatch only, no comment/push/schedule triggers, leas
   assert.match(g, /owner-approval:[\s\S]*environment: owner-approval/);
   assert.match(g, /claim-and-run:\n    needs: \[precheck, owner-approval\]/);
   assert.ok(!/concurrency:/.test(g));
+});
+
+test('idem ref without round ref is IDEM_ORPHAN (deny), not a benign duplicate', async () => {
+  const api = mock(); const i = inp(api, 'SELF-DUP', { idem_key: 'orphan-key-001' });
+  api.refs.add(refNames('refs/odin-test/1', 'SELF-DUP', 0, i.idem_key).idem);
+  const r = await claim(api, i, ENV); assert.equal(r.code, 'IDEM_ORPHAN'); assert.equal(r.exit, 1);
+});
+test('gate files are never in scope even for scope_paths "**"', async () => {
+  const wide = JSON.stringify({ ...JSON.parse(files['SELF-SCOPE']), scope_paths: ['**'] }) + '\n';
+  const api = mock({ authz: { 'SELF-SCOPE': wide } });
+  for (const p of ['.github/workflows/gate.yml', 'authz/SELF-OK.json', 'scripts/gate.mjs', 'tests/x', '.gitignore'])
+    assert.equal((await precheck(api, inp(api, 'SELF-SCOPE', { paths: p }), ENV)).code, 'SCOPE', p);
+  assert.equal((await precheck(api, inp(api, 'SELF-SCOPE', { paths: 'sandbox/a/x' }), ENV)).code, 'ALLOW_PENDING_APPROVAL');
+});
+test('test clock knob is ignored outside the refs/odin-test namespace', async () => {
+  const api = mock();
+  const r = await precheck(api, inp(api, 'SELF-EXPIRED'), { ...ENV, GATE_REF_PREFIX: 'refs/odin', GATE_NOW_MS: String(Date.parse('2026-09-30T00:00:00Z')) });
+  assert.equal(r.code, 'EXPIRED');
+});
+test('REST adapter: createRef/refExists/getHead semantics with a fetch stub', async () => {
+  const real = globalThis.fetch; const calls = [];
+  const stub = (responses) => { globalThis.fetch = async (url, o) => { calls.push({ url, method: o.method }); const r = responses.shift(); return { status: r[0], json: async () => r[1] }; }; };
+  try {
+    const gh = makeGitHub({ token: 't', repo: REPO });
+    stub([[201, {}]]); assert.equal(await gh.createRef('refs/odin/a', BASE), 'created');
+    stub([[422, { message: 'Reference already exists' }]]); assert.equal(await gh.createRef('refs/odin/a', BASE), 'exists');
+    stub([[422, { message: 'Object does not exist' }]]); await assert.rejects(gh.createRef('refs/odin/a', BASE));
+    stub([[403, { message: 'nope' }]]); await assert.rejects(gh.createRef('refs/odin/a', BASE));
+  } catch (e) { /* the prefix-match case is asserted below */ }
+  try {
+    const gh = makeGitHub({ token: 't', repo: REPO });
+    stub([[200, { ref: 'refs/odin/a/b' }]]); await assert.rejects(gh.refExists('refs/odin/a'));
+    stub([[200, [{ ref: 'refs/odin/a' }]]]); await assert.rejects(gh.refExists('refs/odin/a'));
+    stub([[200, { ref: 'refs/odin/a' }]]); assert.equal(await gh.refExists('refs/odin/a'), true);
+    stub([[404, {}]]); assert.equal(await gh.refExists('refs/odin/a'), false);
+    stub([[404, {}]]); assert.equal(await gh.getHead('sandbox-target'), null);
+    stub([[500, {}], [500, {}], [200, { object: { sha: BASE } }]]); assert.equal(await gh.getHead('sandbox-target'), BASE);
+    stub([[500, {}], [500, {}], [500, {}]]); await assert.rejects(gh.getHead('sandbox-target'));
+    stub([[404, {}]]); await gh.getAuthz('a/b c'); assert.ok(calls.at(-1).url.includes('/contents/authz/a%2Fb%20c.json?ref=refs%2Fheads%2Fmain'));
+  } finally { globalThis.fetch = real; }
+});
+test('workflow structure: environment only on the approval job; claim needs it; precheck has none', () => {
+  const y = readFileSync('.github/workflows/gate.yml', 'utf8');
+  const body = (name) => { const m = y.match(new RegExp('^  ' + name + ':\\n([\\s\\S]*?)(?=^  [a-z-]+:\\n|(?![\\s\\S]))', 'm')); assert.ok(m, name); return m[1]; };
+  assert.match(body('owner-approval'), /environment: owner-approval/);
+  assert.match(body('owner-approval'), /needs: precheck/);
+  assert.match(body('owner-approval'), /if: needs\.precheck\.outputs\.run == 'true'/);
+  assert.ok(!/environment:/.test(body('precheck')) && !/environment:/.test(body('claim-and-run')));
+  assert.match(body('claim-and-run'), /needs: \[precheck, owner-approval\]/);
+  assert.ok(!/always\(\)|continue-on-error/.test(y));
+  assert.match(body('precheck'), /contents: read/);
 });

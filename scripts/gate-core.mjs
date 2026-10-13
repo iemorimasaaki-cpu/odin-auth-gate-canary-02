@@ -7,7 +7,7 @@ const RE_PKG = /^[A-Za-z0-9][A-Za-z0-9-]{2,63}$/;
 const RE_SHA = /^[0-9a-f]{40}$/;
 const RE_KEY = /^[a-z0-9][a-z0-9-]{7,63}$/;
 const RE_TS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
-const RE_REF = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,100}$/;
+export const RE_REF = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,100}$/;
 
 export function parseTs(s) {
   if (typeof s !== 'string' || !RE_TS.test(s)) return NaN;
@@ -34,9 +34,11 @@ export function globToRegExp(g) {
   return new RegExp('^' + re + '$');
 }
 
+export const PROTECTED_PREFIXES = ['.github/', 'authz/', 'scripts/', 'tests/'];
 export function pathAllowed(p, globs) {
   const n = normalizePath(p);
   if (n === null) return false;
+  if (PROTECTED_PREFIXES.some((x) => n.startsWith(x)) || n.startsWith('.git')) return false; // gate files are never in scope
   return globs.some((g) => globToRegExp(g).test(n));
 }
 
@@ -64,10 +66,11 @@ export function validateAuthz(a, pkg, repo) {
   if (typeof a.approval_ref !== 'string' || a.approval_ref.length === 0) return 'approval_ref';
   if (a.repo !== repo) return 'repo mismatch';
   if (!RE_SHA.test(a.baseline_sha ?? '')) return 'baseline_sha';
-  if (!RE_REF.test(a.target_ref ?? '')) return 'target_ref';
+  if (!RE_REF.test(a.target_ref ?? '') || a.target_ref.split('/').some((s) => s === '' || s === '.' || s === '..')) return 'target_ref';
   if (!Array.isArray(a.allowed_ops) || !a.allowed_ops.every((o) => OPS.includes(o))) return 'allowed_ops';
   if (!Array.isArray(a.scope_paths) || a.scope_paths.length === 0 || !a.scope_paths.every((g) => typeof g === 'string' && g.length > 0 && !g.startsWith('/') && !g.includes('..'))) return 'scope_paths';
   if (Number.isNaN(parseTs(a.issued_at)) || Number.isNaN(parseTs(a.expires_at))) return 'timestamps';
+  if (parseTs(a.expires_at) <= parseTs(a.issued_at)) return 'expiry_before_issue';
   if (!Number.isInteger(a.max_remediation_rounds) || a.max_remediation_rounds < 0 || a.max_remediation_rounds > 10) return 'max_remediation_rounds';
   if (typeof a.revoked !== 'boolean') return 'revoked';
   if (!STATUSES.includes(a.status)) return 'status';
@@ -100,7 +103,8 @@ export function decide(ctx) {
   if (head !== authz.baseline_sha) return deny('HEAD_MISMATCH', 'WAITING_OWNER');
   const paths = parsePaths(input.paths);
   if (paths.length === 0 || !paths.every((p) => pathAllowed(p, authz.scope_paths))) return deny('SCOPE');
-  if (state.idemExists) return deny('DUPLICATE', 'NOOP');
+  // idem ref without its round ref = a half-consumed earlier attempt: never report it as a benign duplicate
+  if (state.idemExists) return state.claimed.has(round) ? deny('DUPLICATE', 'NOOP') : deny('IDEM_ORPHAN');
   if (round > 0 && !state.claimed.has(round - 1)) return deny('ROUND_GAP');
   if (state.claimed.has(round)) return deny('ROUND_TAKEN');
   return { ok: true };
